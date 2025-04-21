@@ -872,10 +872,11 @@ def main() -> None:
 
         # Combine and send the update
         message = "🌅 **Daily Update at 9:00 AM**:\n\n"
+        message += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
         message += "❌ **Missing Values in New User Stories**:\n" + missing_values_response + "\n\n"
-        message += "-----------------------------------------\n\n"
+        message += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
         message += "⏰ **Approaching Deadlines**:\n" + deadline_response + "\n\n"
-        message += "-----------------------------------------\n\n"
+        message += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
         message += "📋 **Non-Closed User Stories Summary**:\n" + non_closed_response
         await application.bot.send_message(chat_id=chat_id, text=message)
         logger.info(f"Daily update sent to chat {chat_id}")
