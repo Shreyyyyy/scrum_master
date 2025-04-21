@@ -655,8 +655,6 @@ logger = logging.getLogger(__name__)
 
 load_dotenv()
 
-# [Your existing State, Tools, and Agent definitions remain unchanged up to the graph compilation]
-
 # Define the Graph (unchanged up to compilation)
 thread_id = str(uuid.uuid4())
 config = {"configurable": {"user_id": "3442 587242", "thread_id": thread_id}}
@@ -665,24 +663,6 @@ multi_agent_graph = builder.compile(checkpointer=memory)
 
 # Telegram Bot Setup
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-
-
-# Function to print event details (modified to use logger)
-def _print_event(event: dict, _printed: set, max_length=1500):
-    current_state = event.get("dialog_state")
-    if current_state:
-        logger.info(f"Currently in dialog state: {current_state[-1]}")
-    message = event.get("messages")
-    if message:
-        if isinstance(message, list):
-            message = message[-1]
-        if message.id not in _printed:
-            msg_repr = message.pretty_repr()
-            if len(msg_repr) > max_length:
-                msg_repr = msg_repr[:max_length] + " ... (truncated)"
-            logger.info(f"Message: {msg_repr}")
-            _printed.add(message.id)
-
 
 # Function to process user input through the workflow with detailed logging
 import os
@@ -830,7 +810,7 @@ def main() -> None:
         missing_values_response = await process_message(missing_values_query, "automated_task")
 
         # Process deadlines query
-        deadline_query = "Check for approaching deadlines"
+        deadline_query = "show me all approaching deadlines"
         deadline_response = await process_message(deadline_query, "automated_task")
 
         # Combine and send the update
@@ -842,7 +822,7 @@ def main() -> None:
         logger.info(f"Daily update sent to chat {chat_id}")
 
     # Schedule the job to run every day at 1:12 PM
-    scheduler.add_job(daily_update, 'cron', hour=13, minute=32)
+    scheduler.add_job(daily_update, 'cron', hour=16, minute=53,second=30)
     scheduler.start()
 
     # Start the bot
