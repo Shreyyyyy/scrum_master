@@ -1,9 +1,12 @@
 import os
 import base64
 import uuid
+import json
 import threading
 import logging
 import nest_asyncio
+import requests
+import html2text
 from datetime import datetime
 from typing import Annotated, Literal, Optional
 from dotenv import load_dotenv
@@ -22,6 +25,7 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from pytz import timezone
+from urllib.parse import quote
 
 # Apply nest_asyncio for async compatibility
 nest_asyncio.apply()
@@ -123,8 +127,7 @@ def get_azure_api_config():
     }
     return base_url, headers
 
-import html2text
-import json
+
 def clean_html(text):
     if not text:
         return ""
@@ -175,7 +178,15 @@ def get_azure_api_config():
     }
     return base_url, headers
 
+import html2text
+import json
 
+def clean_html(text):
+    if not text:
+        return ""
+    h = html2text.HTML2Text()
+    h.ignore_links = True
+    return h.handle(text).strip()
 
 @tool
 def fetch_azure_board_data(query: AzureQuery) -> str:
@@ -185,7 +196,7 @@ def fetch_azure_board_data(query: AzureQuery) -> str:
 
     wiql = "SELECT [System.Id] FROM WorkItems"
     if query.check_missing_in_new:
-        wiql += " WHERE [System.WorkItemType] = 'User Story' OR [System.WorkItemType] = 'Bug' AND [System.State] = 'New' AND [System.TeamProject] = 'DevFusion2'"
+        wiql += " WHERE [System.WorkItemType] = 'User Story' AND [System.State] = 'New' AND [System.TeamProject] = 'DevFusion2'"
     elif query.where:
         where_clauses = [f"[{k}] = '{v}'" for k, v in query.where.items()]
         wiql += " WHERE " + " AND ".join(where_clauses)
@@ -894,8 +905,30 @@ def main() -> None:
     tz = timezone('Asia/Kolkata')
     scheduler = AsyncIOScheduler(timezone=tz)
 
+    # Helper function to split messages
+    def split_message(text, max_length=4096):
+        lines = text.split('\n')
+        messages = []
+        current_message = ""
+        for line in lines:
+            if len(current_message) + len(line) + 1 > max_length:
+                messages.append(current_message)
+                current_message = line
+            else:
+                if current_message:
+                    current_message += '\n' + line
+                else:
+                    current_message = line
+        if current_message:
+            messages.append(current_message)
+        return messages
+
+    # Updated daily_update function
     async def daily_update():
-        logger.info("Running daily update at 9:00 AM IST")
+        tz = timezone('Asia/Kolkata')
+        current_time = datetime.now(tz).strftime('%I:%M %p %Z')
+        logger.info(f"Running daily update at {current_time}")
+
         missing_values_query = "Check for missing 'description', 'acceptance criteria' and 'assign To' in user stories with state 'new'"
         missing_values_response = await process_message(missing_values_query, "automated_task")
 
@@ -905,18 +938,30 @@ def main() -> None:
         non_closed_query = "summarize non-closed user stories"
         non_closed_response = await process_message(non_closed_query, "automated_task")
 
-        message = "🌅 **Daily Update at 9:00 AM IST**:\n\n"
-        message += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        message += "❌ **Missing Values in New User Stories**:\n" + missing_values_response + "\n\n"
-        message += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        message += "⏰ **Approaching Deadlines**:\n" + deadline_response + "\n\n"
-        message += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        message += "📋 **User Stories Summary**:\n" + non_closed_response
-        await application.bot.send_message(chat_id=GROUP_CHAT_ID, text=message)
-        logger.info(f"Daily update sent to chat {GROUP_CHAT_ID}")
+        # Send header message
+        await application.bot.send_message(chat_id=GROUP_CHAT_ID, text=f"🌅 **Daily Update at {current_time}**")
 
+        # Send missing values section
+        missing_values_text = "❌ **Missing Values in New User Stories**:\n" + missing_values_response
+        missing_values_messages = split_message(missing_values_text)
+        for msg in missing_values_messages:
+            await application.bot.send_message(chat_id=GROUP_CHAT_ID, text=msg)
+
+        # Send approaching deadlines section
+        deadline_text = "⏰ **Approaching Deadlines**:\n" + deadline_response
+        deadline_messages = split_message(deadline_text)
+        for msg in deadline_messages:
+            await application.bot.send_message(chat_id=GROUP_CHAT_ID, text=msg)
+
+        # Send user stories summary section
+        summary_text = "📋 **User Stories Summary**:\n" + non_closed_response
+        summary_messages = split_message(summary_text)
+        for msg in summary_messages:
+            await application.bot.send_message(chat_id=GROUP_CHAT_ID, text=msg)
+
+        logger.info(f"Daily update sent to chat {GROUP_CHAT_ID}")
     # Schedule daily update at 9:00 AM IST
-    scheduler.add_job(daily_update, 'cron', hour=20, minute=49,second=30, timezone=tz)
+    scheduler.add_job(daily_update, 'cron', hour=11, minute=48,second=0, timezone=tz)
     scheduler.start()
     logger.info("Bot is running...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
