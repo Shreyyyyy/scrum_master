@@ -1,12 +1,9 @@
 import os
 import base64
 import uuid
-import json
 import threading
 import logging
 import nest_asyncio
-import requests
-import html2text
 from datetime import datetime
 from typing import Annotated, Literal, Optional
 from dotenv import load_dotenv
@@ -25,7 +22,6 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from pytz import timezone
-from urllib.parse import quote
 
 # Apply nest_asyncio for async compatibility
 nest_asyncio.apply()
@@ -127,7 +123,8 @@ def get_azure_api_config():
     }
     return base_url, headers
 
-
+import html2text
+import json
 def clean_html(text):
     if not text:
         return ""
@@ -178,15 +175,7 @@ def get_azure_api_config():
     }
     return base_url, headers
 
-import html2text
-import json
 
-def clean_html(text):
-    if not text:
-        return ""
-    h = html2text.HTML2Text()
-    h.ignore_links = True
-    return h.handle(text).strip()
 
 @tool
 def fetch_azure_board_data(query: AzureQuery) -> str:
@@ -196,7 +185,7 @@ def fetch_azure_board_data(query: AzureQuery) -> str:
 
     wiql = "SELECT [System.Id] FROM WorkItems"
     if query.check_missing_in_new:
-        wiql += " WHERE [System.WorkItemType] = 'User Story' AND [System.State] = 'New' AND [System.TeamProject] = 'DevFusion2'"
+        wiql += " WHERE [System.WorkItemType] = 'User Story' OR [System.WorkItemType] = 'Bug' AND [System.State] = 'New' AND [System.TeamProject] = 'DevFusion2'"
     elif query.where:
         where_clauses = [f"[{k}] = '{v}'" for k, v in query.where.items()]
         wiql += " WHERE " + " AND ".join(where_clauses)
@@ -394,11 +383,11 @@ class WeeklyQuery(BaseModel):
     team: Optional[str] = Field(default=None, description="Specific team name if applicable")
 
 
-from report_pdf_generator import scrum_report
+from report_pdf_generator import weekly_report
 @tool
 def generate_weekly_status(query: WeeklyQuery) -> str:
     """Generates a weekly status report based on the specified period."""
-    return scrum_report("")
+    return weekly_report("")
 
 class NonClosedStoriesQuery(BaseModel):
     select: list[str] = Field(
@@ -623,8 +612,7 @@ llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash-preview-04-17", temperature
                              api_key=os.getenv("GEMINI_API_KEY"))
 
 scrum_master_prompt = ChatPromptTemplate.from_messages([
-    ("system", "You are a sarcastic multi-language Scrum Master Agent. Greet everyone initially with a unique reply. "
-               "Reply to every query politely and concisely. "
+    ("system", "You are a professional corporate multi-language Scrum Master Agent for a big multi national company. Greet everyone politely and show gratitude in every answer. "
                "If the user asks about Azure Boards, mentions user story, or requests 'missing values in new user stories', delegate to the Azure agent. "
                "If the user asks about deadlines or due dates, delegate to the Deadline agent. "
                "If the user asks about weekly status, planning, or sprint progress, delegate to the Weekly agent."),
@@ -789,9 +777,31 @@ builder.add_conditional_edges("weekly_agent", route_weekly, {
 })
 builder.add_edge("weekly_tools", "weekly_agent")
 
+
 # Compile the Graph
 memory = MemorySaver()
 multi_agent_graph = builder.compile(checkpointer=memory)
+
+import nest_asyncio
+nest_asyncio.apply()  # Required for Jupyter Notebook to run async functions
+from IPython.display import Image, display
+from langchain_core.runnables.graph import CurveStyle, MermaidDrawMethod, NodeStyles
+
+
+# Save the graph as a PNG file
+png_file_path = "graph.png"
+png_image = multi_agent_graph.get_graph().draw_mermaid_png(
+    curve_style=CurveStyle.LINEAR,
+    node_colors=NodeStyles(first="#ffdfba", last="#baffc9", default="#fad7de"),
+    wrap_label_n_words=9,
+    output_file_path=png_file_path,  # Specify the file path to save the PNG
+    draw_method=MermaidDrawMethod.PYPPETEER,
+    background_color="white",
+    padding=10,
+)
+print(f"Graph saved as {png_file_path}")
+
+_printed = set()
 
 # Telegram Bot Setup
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -906,7 +916,7 @@ def main() -> None:
         logger.info(f"Daily update sent to chat {GROUP_CHAT_ID}")
 
     # Schedule daily update at 9:00 AM IST
-    scheduler.add_job(daily_update, 'cron', hour=11, minute=46,second=20, timezone=tz)
+    scheduler.add_job(daily_update, 'cron', hour=20, minute=49,second=30, timezone=tz)
     scheduler.start()
     logger.info("Bot is running...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
