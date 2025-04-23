@@ -23,7 +23,6 @@ import pickle
 import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as ThreadTimeoutError
 from PyPDF2 import PdfReader, PdfWriter
-from uuid import uuid4
 
 warnings.filterwarnings("ignore")
 
@@ -34,9 +33,13 @@ GROQ_API_KEY = os.getenv("groq_api")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
+if not AZURE_API_TOKEN or not GROQ_API_KEY or not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+    print("One or more required environment variables are missing.")
+    sys.exit(1)
+
 # Azure DevOps Details
-ORGANIZATION = os.getenv("ORGANIZATION")
-PROJECT = os.getenv("PROJECT")
+ORGANIZATION = "SahejMarwah"
+PROJECT = "DevFusion2"
 HEADERS = {
     "Authorization": f"Bearer {AZURE_API_TOKEN}",
     "Content-Type": "application/json"
@@ -47,17 +50,7 @@ START_DATE = (datetime.datetime.now() - datetime.timedelta(days=7)).strftime("%Y
 END_DATE = datetime.datetime.now().strftime("%Y-%m-%d")
 
 # Cache File for Insights
-INSIGHTS_CACHE_FILE = "scrum_insights_cache.pkl"
-
-# A4 Page Size (in inches)
-PAGE_SIZE = (8.27, 11.69)  # A4: 210mm x 297mm
-
-# Styling Constants
-PRIMARY_COLOR = '#2c3e50'
-SECONDARY_COLOR = '#34495e'
-TEXT_COLOR = '#7f8c8d'
-TABLE_HEADER_COLOR = '#34495e'
-TABLE_CELL_COLOR = '#ecf0f1'
+INSIGHTS_CACHE_FILE = "insights_cache.pkl"
 
 # Telegram Function
 def send_pdf_to_telegram(pdf_path: str):
@@ -68,7 +61,7 @@ def send_pdf_to_telegram(pdf_path: str):
             files = {'document': pdf_file}
             data = {
                 'chat_id': TELEGRAM_CHAT_ID,
-                'caption': f'Scrum Meeting Report ({datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")})'
+                'caption': f'Weekly Azure DevOps Report ({datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")})'
             }
             response = requests.post(url, files=files, data=data, timeout=60)
         if response.ok:
@@ -87,22 +80,24 @@ def compress_pdf(input_path: str, output_path: str):
     try:
         reader = PdfReader(input_path)
         writer = PdfWriter()
+
         for page in reader.pages:
             writer.add_page(page)
-            page.compress_content_streams()
+            page.compress_content_streams()  # Compress content streams
+
         with open(output_path, 'wb') as f_out:
             writer.write(f_out)
+
         print(f"PDF compressed from {os.path.getsize(input_path)} bytes to {os.path.getsize(output_path)} bytes")
         return True
     except Exception as e:
         print(f"Error compressing PDF: {e}")
         return False
-
 # Tool Definition
-@tool("scrum_report", return_direct=True)
-def scrum_report(tool_input: str = ""):
+@tool("weekly_report", return_direct=True)
+def weekly_report(tool_input: str = ""):
     """
-    Generate a professional Scrum meeting PDF report with Azure DevOps work items and LLM insights.
+    Generate a PDF report with Azure DevOps work items and LLM insights.
     User Stories are sorted by state: New, Active, Resolved, Closed.
     """
     def safe_get(data, keys, default="N/A"):
@@ -139,7 +134,7 @@ def scrum_report(tool_input: str = ""):
         all_ids = user_story_ids + bug_ids
 
         if not all_ids:
-            print("No work items found in the last 7 days.")
+            print("No work items found in the last 14 days.")
             return {"user_stories": [], "bugs": []}
 
         details_url = f"https://dev.azure.com/{ORGANIZATION}/{PROJECT}/_apis/wit/workitems?ids={','.join(all_ids)}&api-version=7.2-preview.2"
@@ -155,13 +150,12 @@ def scrum_report(tool_input: str = ""):
             fields = item.get("fields", {})
             work_item = {
                 "id": str(item.get("id")),
-                "title": fields.get("System.Title", "N/A"),
+                "title": textwrap.shorten(fields.get("System.Title", "N/A"), width=50, placeholder="..."),
                 "state": safe_get(fields, ["System.State"], "N/A"),
                 "created_date": safe_get(fields, ["System.CreatedDate"], "N/A"),
-                "assigned_to": safe_get(fields, ["System.AssignedTo", "displayName"], "Unassigned"),
+                "assigned_to": safe_get(fields, ["System.AssignedTo", "displayName"], "Not assigned"),
                 "acceptance_criteria": safe_get(fields, ["Microsoft.VSTS.Common.AcceptanceCriteria"], "N/A"),
-                "discussion": safe_get(fields, ["System.History"], "N/A"),
-                "priority": safe_get(fields, ["Microsoft.VSTS.Common.Priority"], "N/A")
+                "discussion": safe_get(fields, ["System.History"], "N/A")
             }
             if fields.get("System.WorkItemType") == "User Story":
                 user_stories.append(work_item)
@@ -188,34 +182,30 @@ def scrum_report(tool_input: str = ""):
         except Exception as e:
             print(f"Error saving insights cache: {e}")
 
+    from langchain_google_genai import ChatGoogleGenerativeAI
+
     def generate_insights(data):
-        print("Generating LLM insights for Scrum report...")
-        llm = ChatGroq(
-            temperature=0.7,
-            model="llama3-70b-8192",
-            api_key=GROQ_API_KEY
-        )
+        print("Generating LLM insights...")
+        llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash-preview-04-17", temperature=0.2,
+                                     api_key=os.getenv("GEMINI_API_KEY"))
+
         insights = load_insights_cache()
         prompt_template = PromptTemplate(
-            input_variables=["title", "state", "assigned_to", "acceptance_criteria", "discussion", "created_date", "priority"],
+            input_variables=["title", "state", "assigned_to", "acceptance_criteria", "discussion", "created_date"],
             template="""
-            You are a Scrum Master analyzing an Azure DevOps work item for a sprint. Provide concise insights:
+            Provide insights for the following Azure DevOps work item:
             - Title: {title}
             - State: {state}
             - Assigned To: {assigned_to}
             - Created Date: {created_date}
-            - Priority: {priority}
             - Acceptance Criteria: {acceptance_criteria}
             - Discussion: {discussion}
 
-            Output a structured response with:
-            1. **Progress**: Summarize the work item's status and progress (1 sentence).
-            2. **Blockers**: Identify any potential issues or delays (1 sentence).
-            3. **Recommendations**: Suggest actionable steps for the Scrum team (1 sentence).
+            Briefly analyze the progress, potential blockers, and provide recommendations.
             """
         )
         chain = LLMChain(llm=llm, prompt=prompt_template)
-        max_items = 5  # Limit to 5 items for performance
+        max_items = 3  # Reduced from 10 to speed up
 
         def process_item(item, category):
             item_id = item['id']
@@ -228,10 +218,9 @@ def scrum_report(tool_input: str = ""):
                             "assigned_to": item['assigned_to'],
                             "acceptance_criteria": item['acceptance_criteria'],
                             "discussion": item['discussion'],
-                            "created_date": item['created_date'],
-                            "priority": item['priority']
+                            "created_date": item['created_date']
                         })
-                        response = future.result(timeout=30)
+                        response = future.result(timeout=30)  # 30-second timeout per item
                         insights[category][item_id] = response.get('text', "N/A")
                 except ThreadTimeoutError:
                     print(f"Timeout generating insight for item {item_id}")
@@ -247,258 +236,166 @@ def scrum_report(tool_input: str = ""):
         save_insights_cache(insights)
         return insights
 
-    def create_summary(data, insights):
-        """Generate a summary for the Scrum meeting report using LLM."""
-        llm = ChatGroq(
-            temperature=0.7,
-            model="llama3-70b-8192",
-            api_key=GROQ_API_KEY
-        )
-        user_stories_count = len(data['user_stories'])
-        bugs_count = len(data['bugs'])
-        state_counts = {}
-        blockers_count = 0
-        for item in data['user_stories'] + data['bugs']:
-            state = item['state']
-            state_counts[state] = state_counts.get(state, 0) + 1
-            insight = insights.get('user_stories', {}).get(item['id'],
-                      insights.get('bugs', {}).get(item['id'], ""))
-            if "Blockers: None" not in insight and "Blockers:" in insight:
-                blockers_count += 1
-
-        insights_summary = []
-        for category in ["user_stories", "bugs"]:
-            for item_id, insight in insights[category].items():
-                insights_summary.append(f"Item {item_id}: {insight[:100]}...")
-
-        prompt_template = PromptTemplate(
-            input_variables=["user_stories_count", "bugs_count", "state_counts", "blockers_count", "insights_summary"],
-            template="""
-            You are a Scrum Master preparing a summary for a weekly Scrum meeting. Based on the following data:
-            - User Stories: {user_stories_count}
-            - Bugs: {bugs_count}
-            - State Distribution: {state_counts}
-            - Number of Items with Blockers: {blockers_count}
-            - Insights Sample: {insights_summary}
-
-            Provide a professional summary (150-200 words) that includes:
-            1. **Overview**: Work items completed, in progress, and total (1-2 sentences).
-            2. **Key Blockers**: Challenges identified with number of affected items (1-2 sentences).
-            3. **Recommendations**: Actionable steps for the next sprint (1-2 sentences).
-            Use a formal tone suitable for a Scrum meeting report.
-            """
-        )
-        chain = LLMChain(llm=llm, prompt=prompt_template)
-        try:
-            response = chain.invoke({
-                "user_stories_count": user_stories_count,
-                "bugs_count": bugs_count,
-                "state_counts": json.dumps(state_counts),
-                "blockers_count": blockers_count,
-                "insights_summary": "\n".join(insights_summary[:3])
-            })
-            return response.get('text', "Summary generation failed.")
-        except Exception as e:
-            print(f"Error generating summary: {e}")
-            return "Failed to generate summary."
-
     def create_pdf_report(data, insights):
-        # State order for sorting
-        state_order = {'New': 0, 'Active': 1, 'Dev Done': 2, 'QA Pass': 3, 'QA Fail': 4, 'Resolved': 5, 'Closed': 6}
-        sorted_user_stories = sorted(data['user_stories'], key=lambda x: state_order.get(x['state'], 7))
+        state_order = {'New': 0, 'Active': 1,'Dev Done':2,'QA Pass':3,'QA Fail':4,'Resolved': 5, 'Closed': 6}
+        sorted_user_stories = sorted(data['user_stories'], key=lambda x: state_order.get(x['state'], 4))
 
-        # Aggregate state counts
-        states = {'New': 0, 'Active': 0, 'Dev Done': 0, 'QA Pass': 0, 'QA Fail': 0, 'Resolved': 0, 'Closed': 0}
+        states = {'New': 0, 'Active': 0,'Dev Done':0,'QA Pass':0,'QA Fail':0,'Resolved':0, 'Closed': 0}
         for item in data['user_stories'] + data['bugs']:
             state = item['state']
-            states[state] = states.get(state, 0) + 1
+            if state in states:
+                states[state] += 1
+            else:
+                states[state] = 1
         backlog_state = states
 
-        # File paths with timestamp
+        # Use timestamp in PDF filename
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        pdf_path = f"scrum_report_{timestamp}.pdf"
-        compressed_pdf_path = f"scrum_report_compressed_{timestamp}.pdf"
-        page_number = 1
+        pdf_path = f"azure_report_{timestamp}.pdf"
+        compressed_pdf_path = f"azure_report_compressed_{timestamp}.pdf"
 
         with PdfPages(pdf_path) as pdf:
-            # Cover Page
-            fig = plt.figure(figsize=PAGE_SIZE)
-            ax = fig.add_axes([0.1, 0.1, 0.8, 0.8])
+            # Title Page
+            fig, ax = plt.subplots(figsize=(8.27, 11.69))  # A4 portrait: 8.27x11.69 inches
             ax.axis('off')
-            ax.text(0.5, 0.9, "Scrum Meeting Report", fontsize=26, ha='center', weight='bold', color=PRIMARY_COLOR)
-            ax.text(0.5, 0.7, f"{ORGANIZATION} - {PROJECT}", fontsize=20, ha='center', color=SECONDARY_COLOR)
-            ax.text(0.5, 0.5, f"Week of {START_DATE} to {END_DATE}", fontsize=16, ha='center', color=TEXT_COLOR)
-            ax.text(0.5, 0.3, f"Generated on {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-                    fontsize=12, ha='center', color=TEXT_COLOR)
-            ax.text(0.5, 0.1, "Prepared by Grok 3 (xAI)", fontsize=10, ha='center', color=TEXT_COLOR)
-            fig.text(0.95, 0.02, f"Page {page_number}", ha='right', fontsize=8, color=TEXT_COLOR)
-            pdf.savefig(fig, bbox_inches='tight', pad_inches=0.2)
+            ax.text(0.5, 0.7, "Scrum Master Weekly Report", ha='center', va='center', fontsize=24, fontweight='bold')
+            ax.text(0.5, 0.6, f"From {START_DATE} to {END_DATE}", ha='center', va='center', fontsize=14)
+            plt.tight_layout()
+            pdf.savefig(fig)
             plt.close()
-            page_number += 1
-
-            # Summary Page
-            summary_text = create_summary(data, insights)
-            fig = plt.figure(figsize=PAGE_SIZE)
-            ax = fig.add_axes([0.05, 0.1, 0.9, 0.85])
-            ax.axis('off')
-            ax.text(0, 0.95, "Sprint Summary", fontsize=18, ha='left', weight='bold', color=PRIMARY_COLOR)
-            wrapped_text = textwrap.fill(summary_text, width=100)
-            ax.text(0, 0.9, wrapped_text, fontsize=11, ha='left', va='top')
-            fig.text(0.5, 0.05, "Page 2: Executive summary of sprint progress and recommendations",
-                     ha='center', fontsize=8, color=TEXT_COLOR)
-            fig.text(0.95, 0.02, f"Page {page_number}", ha='right', fontsize=8, color=TEXT_COLOR)
-            pdf.savefig(fig, bbox_inches='tight', pad_inches=0.2)
-            plt.close()
-            page_number += 1
 
             # Donut Chart for Work Items by State
-            fig = plt.figure(figsize=PAGE_SIZE)
-            ax = fig.add_axes([0.1, 0.3, 0.8, 0.6])
-            cmap = plt.get_cmap('Set2')
+            fig, ax = plt.subplots(figsize=(8.27, 11.69))  # A4 portrait: 8.27x11.69 inches
+            cmap = plt.get_cmap('tab10')
             states_list = list(backlog_state.keys())
             counts = list(backlog_state.values())
-            donut_colors = [cmap(i % 8) for i in range(len(states_list))]
-            ax.pie(counts, labels=states_list, autopct='%1.1f%%', startangle=90,
-                   wedgeprops=dict(width=0.4), colors=donut_colors, textprops={'fontsize': 10, 'weight': 'bold'})
-            ax.set_title("Work Items by State", fontsize=16, pad=20, color=PRIMARY_COLOR)
-            fig.text(0.5, 0.05, "Figure 1: Distribution of user stories and bugs by state",
-                     ha='center', fontsize=8, color=TEXT_COLOR)
-            fig.text(0.95, 0.02, f"Page {page_number}", ha='right', fontsize=8, color=TEXT_COLOR)
-            pdf.savefig(fig, bbox_inches='tight', pad_inches=0.2)
+            donut_colors = [cmap(i % 10) for i in range(len(states_list))]
+            ax.pie(counts, labels=states_list, autopct='%1.1f%%', startangle=90, wedgeprops=dict(width=0.3),
+                   colors=donut_colors, textprops={'fontsize': 12})
+            ax.set_title("Work Items by State (Donut Chart)", fontsize=16, pad=20)
+            plt.tight_layout()
+            pdf.savefig(fig)
             plt.close()
-            page_number += 1
 
-            # Horizontal Bar Chart by Member and State
+            # Horizontal Bar Chart for Work Items by Member and State
             all_states = list(backlog_state.keys())
             member_state_counts = {}
             for item in data['user_stories'] + data['bugs']:
-                assigned_to = item['assigned_to']
+                assigned_to = item['assigned_to'] if item['assigned_to'] else "Not assigned"
                 state = item['state']
                 if assigned_to not in member_state_counts:
                     member_state_counts[assigned_to] = {s: 0 for s in all_states}
                 member_state_counts[assigned_to][state] += 1
 
             df = pd.DataFrame.from_dict(member_state_counts, orient='index')
-            fig = plt.figure(figsize=PAGE_SIZE)
-            ax = fig.add_axes([0.15, 0.2, 0.75, 0.7])
-            bar_colors = [cmap(i % 8) for i in range(len(all_states))]
-            df.plot(kind='barh', stacked=True, ax=ax, color=bar_colors, legend=False)
+            fig, ax = plt.subplots(figsize=(8.27, 11.69))  # A4 portrait: 8.27x11.69 inches
+            bar_colors = [cmap(i % 10) for i in range(len(all_states))]
+            bars = df.plot(kind='barh', stacked=True, ax=ax, color=bar_colors)
+
             total_items = df.sum().sum()
-            for bar_group in ax.patches:
-                width = bar_group.get_width()
-                if width > 0:
-                    percentage = (width / total_items) * 100
-                    ax.text(bar_group.get_x() + width / 2, bar_group.get_y() + bar_group.get_height() / 2,
-                            f'{percentage:.1f}%', ha='center', va='center', color='white', fontsize=9)
-            ax.set_title("Work Items by Team Member and State", fontsize=16, pad=20, color=PRIMARY_COLOR)
-            ax.set_xlabel("Number of Work Items", fontsize=11)
-            ax.set_ylabel("Team Members", fontsize=11)
-            ax.legend(title="State", labels=all_states, bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=9)
-            fig.text(0.5, 0.05, "Figure 2: Team-wise breakdown of work items per state",
-                     ha='center', fontsize=8, color=TEXT_COLOR)
-            fig.text(0.95, 0.02, f"Page {page_number}", ha='right', fontsize=8, color=TEXT_COLOR)
-            pdf.savefig(fig, bbox_inches='tight', pad_inches=0.2)
+            for i, bar_group in enumerate(bars.containers):
+                for bar in bar_group:
+                    width = bar.get_width()
+                    if width > 0:
+                        percentage = (width / total_items) * 100
+                        ax.text(bar.get_x() + width / 2, bar.get_y() + bar.get_height() / 2,
+                                f'{percentage:.1f}%', ha='center', va='center', color='white', fontsize=9,
+                                weight='bold')
+
+            ax.set_title("Work Items by Member and State", fontsize=14, pad=15)
+            ax.set_xlabel("Number of Work Items", fontsize=12)
+            ax.set_ylabel("Team Members", fontsize=12)
+            ax.tick_params(axis='both', labelsize=10)
+            ax.legend(title="State", labels=all_states, fontsize=10, title_fontsize=11, loc='upper right')
+            max_count = df.sum(axis=1).max()
+            ax.set_xticks(range(0, int(max_count) + 1, 2))
+            plt.tight_layout(pad=2.0)
+            pdf.savefig(fig, bbox_inches='tight')
             plt.close()
-            page_number += 1
 
-            # Pie Chart for Work Item Types
-            user_stories_count = len(data['user_stories'])
-            bugs_count = len(data['bugs'])
-            fig = plt.figure(figsize=PAGE_SIZE)
-            ax = fig.add_axes([0.1, 0.3, 0.8, 0.6])
-            labels = ['User Stories', 'Bugs']
-            sizes = [user_stories_count, bugs_count]
-            colors = ['#66b3ff', '#ff9999']
-            ax.pie(sizes, labels=labels, autopct='%1.1f%%', startangle=90, colors=colors,
-                   textprops={'fontsize': 12, 'weight': 'bold'})
-            ax.set_title("Distribution of Work Items", fontsize=16, pad=20, color=PRIMARY_COLOR)
-            fig.text(0.5, 0.05, "Figure 3: Proportion of user stories and bugs",
-                     ha='center', fontsize=8, color=TEXT_COLOR)
-            fig.text(0.95, 0.02, f"Page {page_number}", ha='right', fontsize=8, color=TEXT_COLOR)
-            pdf.savefig(fig, bbox_inches='tight', pad_inches=0.2)
-            plt.close()
-            page_number += 1
+            # Table of All Work Items
+            fig, ax = plt.subplots(figsize=(8.27, 11.69))  # A4 portrait: 8.27x11.69 inches
+            ax.axis('off')
+            ax.set_title("Work Items Table", fontsize=16)
 
-            # Table Rendering Function
-            def render_table(title, table_data, headers, caption=None, col_widths=None):
-                fig = plt.figure(figsize=PAGE_SIZE)
-                ax = fig.add_axes([0.05, 0.1, 0.9, 0.85])
-                ax.axis('off')
-                ax.text(0, 0.98, title, fontsize=16, ha='left', weight='bold', color=PRIMARY_COLOR)
-                table = ax.table(cellText=table_data, colLabels=headers, loc='center', cellLoc='left',
-                                 colColours=[TABLE_HEADER_COLOR] * len(headers), colWidths=col_widths,
-                                 bbox=[0, 0.2, 1, 0.75])
-                table.auto_set_font_size(False)
-                table.set_fontsize(8)
-                table.scale(1.0, 1.5)
-                for (i, j), cell in table.get_celld().items():
-                    if i == 0:
-                        cell.set_text_props(weight='bold', color='white')
-                        cell.set_facecolor(TABLE_HEADER_COLOR)
-                    else:
-                        cell.set_facecolor(TABLE_CELL_COLOR)
-                    cell.set_edgecolor('#bdc3c7')
-                    cell.set_height(0.07)
-                if caption:
-                    fig.text(0.5, 0.05, caption, ha='center', fontsize=8, color=TEXT_COLOR)
-                fig.text(0.95, 0.02, f"Page {page_number}", ha='right', fontsize=8, color=TEXT_COLOR)
-                pdf.savefig(fig, bbox_inches='tight', pad_inches=0.2)
-                plt.close()
-                return page_number + 1
-
-            # All Work Items Table
             table_data = []
-            headers = ["ID", "Title", "State", "Assigned To", "Priority", "Created Date"]
-            col_widths = [0.1, 0.3, 0.15, 0.2, 0.1, 0.15]
-            for item in sorted_user_stories + data['bugs']:
-                table_data.append([
-                    item['id'],
-                    textwrap.fill(item['title'], width=30),
-                    item['state'],
-                    item['assigned_to'],
-                    item['priority'],
-                    item['created_date'][:10]
-                ])
-            page_number = render_table("All Work Items", table_data, headers,
-                                      caption="Table 1: Consolidated list of user stories and bugs",
-                                      col_widths=col_widths)
+            headers = ["ID", "Title", "State", "Assigned To", "Created Date"]
+            for item in sorted_user_stories:
+                table_data.append(
+                    [item['id'], item['title'], item['state'], item['assigned_to'], item['created_date'][:10]])
+            for item in data['bugs']:
+                table_data.append(
+                    [item['id'], item['title'], item['state'], item['assigned_to'], item['created_date'][:10]])
 
-            # Individual State Tables with Insights
-            for state in state_order.keys():
-                state_data = []
-                for item in sorted_user_stories + data['bugs']:
-                    if item['state'] == state:
-                        insight = insights.get('user_stories', {}).get(item['id'],
-                                                                       insights.get('bugs', {}).get(item['id'], "N/A"))
-                        state_data.append([
-                            item['id'],
-                            textwrap.fill(item['title'], width=30),
-                            item['assigned_to'],
-                            textwrap.fill(insight, width=40)
-                        ])
-                if state_data:
-                    headers = ["ID", "Title", "Assigned To", "LLM Insights"]
-                    col_widths = [0.1, 0.3, 0.2, 0.4]
-                    page_number = render_table(f"{state} Work Items", state_data, headers,
-                                               caption=f"Table: Work items in '{state}' state with LLM insights",
-                                               col_widths=col_widths)
+            table = ax.table(cellText=table_data, colLabels=headers, loc='center', cellLoc='left',
+                             colColours=['#f0f0f0'] * len(headers), bbox=[0.05, 0.05, 0.9, 0.9])
+            table.auto_set_font_size(False)
+            table.set_fontsize(8)
+            table.scale(1.2, 1.2)
+            table.auto_set_column_width([0, 2, 3, 4])
+            table.auto_set_column_width([1])
+            for (i, j), cell in table.get_celld().items():
+                if i == 0:
+                    cell.set_text_props(weight='bold')
+                    cell.set_facecolor('#d3d3d3')
+                cell.set_edgecolor('black')
+            plt.tight_layout()
+            pdf.savefig(fig, bbox_inches="tight")
+            plt.close(fig)
 
-        # Handle PDF compression
+            # Individual State Tables
+            all_items = sorted_user_stories + data['bugs']
+            state_groups = {'New': [], 'Active': [], 'Resolved': [], 'Closed': []}
+            for item in all_items:
+                state = item['state']
+                if state in state_groups:
+                    state_groups[state].append(item)
+
+            for state, items in state_groups.items():
+                if items:  # Only create a table if there are items for the state
+                    fig, ax = plt.subplots(figsize=(8.27, 11.69))  # A4 portrait: 8.27x11.69 inches
+                    ax.axis('off')
+                    ax.set_title(f"{state} Work Items", fontsize=16)
+
+                    table_data = []
+                    headers = ["ID", "Title", "State", "Assigned To", "Created Date"]
+                    for item in items:
+                        table_data.append(
+                            [item['id'], item['title'], item['state'], item['assigned_to'], item['created_date'][:10]])
+
+                    table = ax.table(cellText=table_data, colLabels=headers, loc='center', cellLoc='left',
+                                     colColours=['#f0f0f0'] * len(headers), bbox=[0.05, 0.05, 0.9, 0.9])
+                    table.auto_set_font_size(False)
+                    table.set_fontsize(8)
+                    table.scale(1.2, 1.2)
+                    table.auto_set_column_width([0, 2, 3, 4])
+                    table.auto_set_column_width([1])
+                    for (i, j), cell in table.get_celld().items():
+                        if i == 0:
+                            cell.set_text_props(weight='bold')
+                            cell.set_facecolor('#d3d3d3')
+                            cell.set_edgecolor('black')
+                        cell.set_edgecolor('black')
+                    plt.tight_layout()
+                    pdf.savefig(fig, bbox_inches="tight")
+                    plt.close(fig)
+
+        # Compress the PDF
         if compress_pdf(pdf_path, compressed_pdf_path):
             final_pdf_path = compressed_pdf_path
         else:
             print("Compression failed, using original PDF.")
             final_pdf_path = pdf_path
 
-        # Verify and send PDF
+        # Send to Telegram (no browser opening)
         abs_pdf_path = os.path.abspath(final_pdf_path)
         print(f"PDF report generated at: {abs_pdf_path}")
         if os.path.exists(abs_pdf_path):
             print(f"File exists. Size: {os.path.getsize(abs_pdf_path)} bytes")
             if send_pdf_to_telegram(abs_pdf_path):
-                return "Scrum meeting report with LLM insights generated and sent to Telegram successfully."
+                return "Weekly report with LLM insights generated and sent to Telegram successfully."
             else:
-                return "Scrum meeting report generated but failed to send to Telegram."
+                return "Weekly report generated but failed to send to Telegram."
         else:
             return "Error: PDF file not found."
 
@@ -509,20 +406,20 @@ def scrum_report(tool_input: str = ""):
         return create_pdf_report(data, insights)
     except Exception as e:
         print(f"Error in report generation: {e}")
-        return f"Failed to generate Scrum report: {str(e)}"
+        return f"Failed to generate weekly report: {str(e)}"
 
 # Agent Setup
 def create_agent():
     """Create and return the LangChain agent for report generation."""
     llm = ChatGroq(
         temperature=0.7,
-        model="llama3-70b-8192",
-        api_key=GROQ_API_KEY
+        model_name="llama3-70b-8192",
+        groq_api_key=GROQ_API_KEY
     )
-    tools = [scrum_report]
+    tools = [weekly_report]
     prompt = ChatPromptTemplate.from_messages([
         ("system",
-         "You are a Scrum Master assistant that generates professional Scrum meeting reports. Use the provided tool to create reports when requested."),
+         "You are an assistant that generates Azure DevOps reports. Use the provided tool to create reports when requested. Respond with the tool's output or an error message if the request cannot be processed."),
         ("human", "{input}"),
         ("placeholder", "{agent_scratchpad}"),
     ])
@@ -539,16 +436,19 @@ def create_agent():
 async def report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle the /report command by triggering the agent to generate the report."""
     chat_id = str(update.effective_chat.id)
+    print(f"Received chat_id: {chat_id}, Expected TELEGRAM_CHAT_ID: {TELEGRAM_CHAT_ID}")
     if chat_id != TELEGRAM_CHAT_ID:
-        await update.message.reply_text(f"Sorry, this command is restricted. Received chat_id: {chat_id}")
+        await update.message.reply_text(
+            f"Sorry, this command is restricted to a specific group. Received chat_id: {chat_id}")
         return
 
-    await update.message.reply_text("Generating Scrum meeting report, please wait...")
+    await update.message.reply_text("Generating Azure DevOps report, please wait... This may take a moment.")
 
     try:
+        # Use the agent to process the report request
         start_time = time.time()
         agent_executor = create_agent()
-        result = agent_executor.invoke({"input": "Please generate the Scrum meeting report."})
+        result = agent_executor.invoke({"input": "Please generate the weekly Azure DevOps report."})
         elapsed_time = time.time() - start_time
         print(f"Report generation took {elapsed_time:.2f} seconds")
         await update.message.reply_text(result["output"])
@@ -571,10 +471,13 @@ def run_bot_in_background():
     run_telegram_bot()
 
 if __name__ == "__main__":
+    # Start the Telegram bot in a background thread
     bot_thread = threading.Thread(target=run_bot_in_background, daemon=True)
     bot_thread.start()
+
+    # Keep the main thread alive
     try:
         while True:
-            time.sleep(1)
+            pass
     except KeyboardInterrupt:
         print("Script terminated.")
