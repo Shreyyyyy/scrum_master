@@ -30,13 +30,91 @@ from urllib.parse import quote
 # Apply nest_asyncio for async compatibility
 nest_asyncio.apply()
 
-# Set up logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# At the top of your script, after imports
+import logging
+import time
+import random
+from typing import List
+
+# ANSI color codes
+COLORS = [
+    '\033[93m', '\033[95m', '\033[96m'
+]
+RESET = '\033[0m'
+
+class MultiColorFormatter(logging.Formatter):
+    def __init__(self, fmt: str, colors: List[str]):
+        super().__init__(fmt)
+        self.colors = colors
+        self.last_color_time = time.time()
+        self.current_colors = [random.choice(colors) for _ in range(3)]
+
+    def format(self, record: logging.LogRecord) -> str:
+        current_time = time.time()
+        if current_time - self.last_color_time >= 1:
+            self.current_colors = random.sample(self.colors, 3) if len(self.colors) >= 3 else [random.choice(self.colors) for _ in range(3)]
+            self.last_color_time = current_time
+
+        timestamp = self.formatTime(record, self.datefmt)
+        level = record.levelname
+        message = record.getMessage()
+
+        # Add emojis based on log level
+        emoji = "ℹ️" if level == "INFO" else "⚠️" if level == "WARNING" else "❌" if level == "ERROR" else "🐛"
+        action_emoji = "🚀" if "Processing message" in message else "📋" if "Message:" in message else "🔧" if "Invoking" in message else "🌟"
+
+        colored_timestamp = f"{self.current_colors[0]}{timestamp}{RESET}"
+        colored_level = f"{self.current_colors[1]}{level}{RESET}"
+        colored_message = f"{self.current_colors[2]}{emoji} {action_emoji} {message}{RESET}"
+
+        return f"{colored_timestamp} - {colored_level} - {colored_message}"
+# Replace your existing logging setup
+def setup_logging():
+    for handler in logging.root.handlers[:]:
+        logging.root.removeHandler(handler)
+    logger = logging.getLogger()
+    logger.setLevel(logging.INFO)
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.INFO)
+    log_format = '%(asctime)s - %(levelname)s - %(message)s'
+    formatter = MultiColorFormatter(log_format, COLORS)
+    console_handler.setFormatter(formatter)
+    logger.addHandler(console_handler)
+
+# Call setup_logging early in your script, before any logging
+setup_logging()
 logger = logging.getLogger(__name__)
+
+# Rest of your code remains unchanged
 
 # Load environment variables
 load_dotenv()
 
+class MultiColorFormatter(logging.Formatter):
+    def __init__(self, fmt: str, colors: List[str]):
+        super().__init__(fmt)
+        self.colors = colors
+        self.last_color_time = time.time()
+        self.current_colors = [random.choice(colors) for _ in range(3)]
+
+    def format(self, record: logging.LogRecord) -> str:
+        current_time = time.time()
+        if current_time - self.last_color_time >= 1:
+            self.current_colors = random.sample(self.colors, 3) if len(self.colors) >= 3 else [random.choice(self.colors) for _ in range(3)]
+            self.last_color_time = current_time
+
+        timestamp = self.formatTime(record, self.datefmt)
+        level = record.levelname
+        message = record.getMessage()
+
+        # Add emojis based on log level
+        emoji = "ℹ️" if level == "INFO" else "⚠️" if level == "WARNING" else "❌" if level == "ERROR" else "🐛"
+
+        colored_timestamp = f"{self.current_colors[0]}{timestamp}{RESET}"
+        colored_level = f"{self.current_colors[1]}{level}{RESET}"
+        colored_message = f"{self.current_colors[2]}{emoji} {message}{RESET}"
+
+        return f"{colored_timestamp} - {colored_level} - {colored_message}"
 
 # Define the State schema
 def update_dialog_stack(left: list[str], right: Optional[str]) -> list[str]:
@@ -195,11 +273,19 @@ def fetch_azure_board_data(query: AzureQuery) -> str:
     base_url, headers = get_azure_api_config()
 
     wiql = "SELECT [System.Id] FROM WorkItems"
+
+    # Always ensure project is DevFusion2
+    where_clauses = ["[System.TeamProject] = 'DevFusion2'"]
+
     if query.check_missing_in_new:
-        wiql += " WHERE [System.WorkItemType] = 'User Story' AND [System.State] = 'New' AND [System.TeamProject] = 'DevFusion2'"
-    elif query.where:
-        where_clauses = [f"[{k}] = '{v}'" for k, v in query.where.items()]
+        where_clauses.append("[System.WorkItemType] = 'User Story'")
+
+    if query.where:
+        where_clauses.extend([f"[{k}] = '{v}'" for k, v in query.where.items()])
+
+    if where_clauses:
         wiql += " WHERE " + " AND ".join(where_clauses)
+
     if query.order_by and not query.check_missing_in_new:
         wiql += f" ORDER BY [{query.order_by}]"
 
@@ -542,38 +628,86 @@ class ScrumMasterAgent:
         self.runnable = runnable
 
     def __call__(self, state: State, config: RunnableConfig):
+        logger.info(f"🤝 Scrum Master processing state: {state}")
         result = self.runnable.invoke(state)
         if not result.tool_calls and (
                 not result.content or
                 (isinstance(result.content, str) and result.content.startswith("<tool-use>"))
         ):
-            messages = state["messages"] + [HumanMessage(content="Respond with a real output.")]
+            messages = state["messages"] + [
+                HumanMessage(content="📢 Please provide a valid request or clarify what you need!")]
             state = {**state, "messages": messages}
             result = self.runnable.invoke(state)
-        return {"messages": result}
 
+        # Enhance the response with emojis
+        if result.content and not result.tool_calls:
+            enhanced_content = result.content.replace("Thank you", "🙌 Thank you") \
+                .replace("assist you", "help you out 🚀") \
+                .replace("Azure Assistant", "📊 Azure Assistant") \
+                .replace("Deadline Assistant", "⏰ Deadline Assistant") \
+                .replace("Weekly Assistant", "📅 Weekly Assistant")
+            return {"messages": AIMessage(content=enhanced_content)}
+        elif result.tool_calls:
+            tool_name = result.tool_calls[0]["name"]
+            enhanced_content = f"🙌 Passing your request to the {tool_name.replace('ToAzureAssisstant', '📊 Azure Assistant').replace('ToDeadlineAssistant', '⏰ Deadline Assistant').replace('ToWeeklyAssistant', '📅 Weekly Assistant')}! Stay tuned! 😄"
+            return {"messages": AIMessage(content=enhanced_content, tool_calls=result.tool_calls)}
+        return {"messages": result}
 
 def azureinfo_agent_node(state: State, config: RunnableConfig):
     try:
-        logger.info(f"Azure agent processing state: {state}")
+        logger.info(f"🔍 Azure agent processing state: {state}")
         result = azureinfo_runnable.invoke(state)
-        logger.info(f"Azure agent LLM output: {result}")
+        logger.info(f"📄 Azure agent LLM output: {result}")
         if not result.tool_calls and (
                 not result.content or
                 isinstance(result.content, str) and result.content.startswith("<tool-use>")
         ):
             messages = state["messages"] + [HumanMessage(
-                content="Please use the fetch_azure_board_data tool to check for missing values or retrieve data as requested.")]
+                content="🔎 Please use *fetch_azure_board_data* or *fetch_non_closed_user_stories* to retrieve the data!")]
             state = {**state, "messages": messages}
             result = azureinfo_runnable.invoke(state)
-            logger.info(f"Azure agent re-invoked with fallback: {result}")
+            logger.info(f"🔄 Azure agent re-invoked with fallback: {result}")
+
+        # Post-process tool output
+        if result.tool_calls:
+            return {"messages": result}
+        elif isinstance(state["messages"][-1], ToolMessage):
+            tool_response = state["messages"][-1].content
+            tool_name = state["messages"][-1].name
+            enhanced_response = tool_response
+            if tool_name == "fetch_non_closed_user_stories":
+                enhanced_response = "📋 *Non-Closed User Stories*:\n\n"
+                for line in tool_response.split("\n")[1:]:
+                    if line.strip():
+                        parts = line.split(":", 1)
+                        if len(parts) == 2:
+                            id_part, details = parts
+                            id_part = id_part.replace("ID", "🆔 ID")
+                            status = details[details.find("(")+1:details.find(")")]
+                            emoji = "🆕" if status == "New" else "💻" if status == "Dev Done" else "✅" if status == "QA Pass" else "❌" if status == "QA Fail" else "⚙️" if status == "Resolved" else "🏃" if status == "Active" else "📝"
+                            details = details.replace("Assigned to:", "👤 Assigned to:")
+                            enhanced_response += f"{emoji} {id_part}: {details}\n"
+            elif tool_name == "fetch_azure_board_data":
+                enhanced_response = tool_response.replace("User Story", "📖 User Story") \
+                                               .replace("Title:", "✨ Title:") \
+                                               .replace("Description:", "📝 Description:") \
+                                               .replace("Assigned To:", "👤 Assigned To:") \
+                                               .replace("Acceptance Criteria:", "✅ Acceptance Criteria:") \
+                                               .replace("State:", "🌈 State:")
+            elif tool_name == "create_azure_work_item":
+                enhanced_response = f"🎉 {tool_response}"
+            elif tool_name == "update_azure_work_item":
+                enhanced_response = f"✅ {tool_response}"
+            elif tool_name == "delete_azure_work_item":
+                enhanced_response = f"🗑️ {tool_response}"
+            return {"messages": AIMessage(content=enhanced_response)}
         return {"messages": result}
     except Exception as e:
-        logger.error(f"Error in azureinfo_agent_node: {str(e)}")
+        logger.error(f"❌ Error in azureinfo_agent_node: {str(e)}")
         return {
             "messages": [
                 AIMessage(
-                    content=f"Error processing Azure request: {str(e)}. Please clarify your request or try again.")
+                    content=f"😓 *Oops, something went wrong!* Error: {str(e)}. Please clarify your request or try again! 🙏")
             ]
         }
 
@@ -581,30 +715,54 @@ def azureinfo_agent_node(state: State, config: RunnableConfig):
 def deadline_agent_node(state: State, config: RunnableConfig):
     if not state.get("dialog_state"):
         state["dialog_state"] = ["deadline_agent"]
+    logger.info(f"⏰ Deadline agent processing state: {state}")
     result = deadline_runnable.invoke(state)
+    logger.info(f"📅 Deadline agent LLM output: {result}")
     if not result.tool_calls and (
             not result.content or
             isinstance(result.content, str) and result.content.startswith("<tool-use>")
     ):
-        # Check if user is asking for previous results
         last_message = state["messages"][-1].content.lower()
         if "show me the result" in last_message and state.get("deadline_results"):
-            return {"messages": AIMessage(content=state["deadline_results"])}
+            return {"messages": AIMessage(content=f"📊 *Previous Deadline Results*:\n{state['deadline_results']}")}
         messages = state["messages"] + [
-            HumanMessage(content="Please use the check_azure_finish_dates tool to fetch approaching deadlines.")]
+            HumanMessage(content="⏰ Please use *check_azure_finish_dates* to fetch approaching deadlines!")]
         state = {**state, "messages": messages}
         result = deadline_runnable.invoke(state)
-    # Store tool output in state if it's a deadline check
+        logger.info(f"🔄 Deadline agent re-invoked with fallback: {result}")
+
     if result.tool_calls and result.tool_calls[0]["name"] == "check_azure_finish_dates":
-        state["deadline_results"] = None  # Will be updated by ToolMessage
+        state["deadline_results"] = None
     last_message = state["messages"][-1]
     if isinstance(last_message,
                   ToolMessage) and last_message.content and last_message.name == "check_azure_finish_dates":
-        state["deadline_results"] = last_message.content
-        return {"messages": AIMessage(content=last_message.content)}
+        enhanced_response = last_message.content.replace("User Story", "📖 User Story") \
+            .replace("Finish date", "⏳ Finish date") \
+            .replace("past due", "🚨 Past due") \
+            .replace("due today", "⚡ Due today") \
+            .replace("day left", "day(s) left 🕒") \
+            .replace("No approaching deadlines", "🎉 No approaching deadlines")
+        state["deadline_results"] = enhanced_response
+        return {"messages": AIMessage(content=f"⏰ *Deadline Check*:\n{enhanced_response}")}
+    elif isinstance(last_message, ToolMessage):
+        tool_name = last_message.name
+        enhanced_response = last_message.content
+        if tool_name == "fetch_azure_data":
+            enhanced_response = f"📊 {last_message.content}"
+        elif tool_name == "process_json_data":
+            enhanced_response = f"📈 {last_message.content}"
+        elif tool_name == "update_azure_devops":
+            enhanced_response = f"✅ {last_message.content}"
+        elif tool_name == "update_azure_values":
+            enhanced_response = f"🔧 {last_message.content}"
+        elif tool_name == "wait_for_user_response":
+            enhanced_response = f"📬 {last_message.content}"
+        elif tool_name == "wait_for_manager_confirmation":
+            enhanced_response = f"👩‍💼 {last_message.content}"
+        elif tool_name == "confirm_update_finish_date":
+            enhanced_response = f"⏳ {last_message.content}"
+        return {"messages": AIMessage(content=enhanced_response)}
     return {"messages": result}
-
-
 def weekly_agent_node(state: State, config: RunnableConfig):
     if not state.get("dialog_state"):
         state["dialog_state"] = ["weekly_agent"]
@@ -623,12 +781,30 @@ llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash-preview-04-17", temperature
                              api_key=os.getenv("GEMINI_API_KEY"))
 
 scrum_master_prompt = ChatPromptTemplate.from_messages([
-    ("system", "You are a professional corporate multi-language Scrum Master Agent for a big multi national company. Greet everyone politely and show gratitude in every answer. "
-               "If the user asks about Azure Boards, mentions user story, or requests 'missing values in new user stories', delegate to the Azure agent. "
-               "If the user asks about deadlines or due dates, delegate to the Deadline agent. "
-               "If the user asks about weekly status, planning, or sprint progress, delegate to the Weekly agent."),
+    ("system",
+     "You are a professional, highly skilled Scrum Master Agent supporting a large multinational organization, which works in multiple languages and across various time zones. "
+     "Your role is to facilitate smooth Scrum operations, assist in project management, and ensure team productivity and communication are optimized. "
+     "As a Scrum Master Agent, you will greet everyone with warmth, professionalism, and gratitude in every interaction. Always express appreciation for the team's efforts and contributions. "
+     "When handling requests, ensure your responses are polite, empathetic, and solution-oriented, especially during task delegation to specialized agents.\n\n"
+
+     "For CRUD operations, if the user requests to view, add, update, or delete user stories, or mentions anything like 'show all active user stories' (fetching all stories with an 'active' state), "
+     "you must delegate these requests to the Azure agent, which will handle the queries related to Azure DevOps user stories.\n\n"
+
+     "When it comes to due dates, deadlines, or any time-sensitive aspects of the project, the Deadline Management Agent is responsible for providing accurate information and status updates. "
+     "You should transfer all queries regarding deadlines, upcoming tasks, or overdue issues to this agent for efficient management.\n\n"
+
+     "If the user asks for weekly status updates, sprint progress tracking, planning sessions, or any insights into the team's activities during the current sprint, delegate the request to the Weekly Agent. "
+     "This agent will generate detailed reports about sprint progress, individual contributions, and overall team velocity, assisting in decision-making for the upcoming sprint planning.\n\n"
+
+     "Always ensure the conversation flows naturally, fostering a collaborative atmosphere. Stay patient and understanding when handling user queries, guiding them to the appropriate agent for specialized tasks. "
+     "Always seek to empower and encourage your colleagues and team members with gratitude for their efforts, even when providing constructive feedback.\n\n"
+
+     "In case of any complex or ambiguous requests, feel free to ask clarifying questions to ensure that you understand the user's needs thoroughly before delegating tasks or responding directly."
+     ),
+
     ("placeholder", "{messages}")
 ])
+
 scrum_master_runnable = scrum_master_prompt | llm.bind_tools(
     [ToAzureAssisstant, ToDeadlineAssistant, ToWeeklyAssistant],
     tool_choice="auto"
@@ -864,18 +1040,28 @@ async def process_message(message: str, user_id: str) -> str:
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = str(update.message.from_user.id)
     await update.message.reply_text(
-        "Hello! I'm your Scrum Master bot. Let me check for approaching deadlines and missing values in user stories with state 'new'.")
+        "🎉 *Welcome to Your Scrum Master Bot!* 🎉\n"
+        "I'm here to keep your team on track! 🚀 Let’s check for *approaching deadlines* and any *missing details* in your user stories! 😄"
+    )
 
     missing_values_query = "Check for missing 'description', 'acceptance criteria' and 'assign To' in user stories with state 'new'"
     missing_values_response = await process_message(missing_values_query, user_id)
-    await update.message.reply_text(missing_values_response)
+    await update.message.reply_text(
+        f"❌ *Missing Values Check*:\n{missing_values_response}\n\nLet’s get those stories polished! ✨",
+        parse_mode="Markdown"
+    )
 
     deadline_query = "Check for approaching deadlines"
     deadline_response = await process_message(deadline_query, user_id)
-    await update.message.reply_text(deadline_response)
+    await update.message.reply_text(
+        f"⏰ *Deadline Alert*:\n{deadline_response}\n\nStay on top of your game! 🏃‍♂️",
+        parse_mode="Markdown"
+    )
 
-    await update.message.reply_text("Standing by. Tag @acidaes_bot with your request.")
-
+    await update.message.reply_text(
+        "🤖 *I’m ready to assist!* Tag @acidaes_bot with your requests, and let’s make things happen! 💪",
+        parse_mode="Markdown"
+    )
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     try:
@@ -886,12 +1072,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             if f"@{bot_username}" not in user_message:
                 return
         response = await process_message(user_message, user_id)
-        await update.message.reply_text(response)
+        await update.message.reply_text(
+            f"*BotNext!* 🎉\n\n{response}\n\n🚀 *What’s next, team?* Let me know how I can assist! 😄",
+            parse_mode="Markdown"
+        )
     except Exception as e:
-        logger.error(f"Error in handle_message: {str(e)}")
-        await update.message.reply_text("An error occurred. Please try again later.")
-
-
+        logger.error(f"❌ Error in handle_message: {str(e)}")
+        await update.message.reply_text(
+            "😓 *Oops, something went wrong!* Please try again or let me know how I can assist! 🙏",
+            parse_mode="Markdown"
+        )
 # Main function to run the bot with scheduler
 def main() -> None:
     global application
@@ -939,29 +1129,33 @@ def main() -> None:
         non_closed_response = await process_message(non_closed_query, "automated_task")
 
         # Send header message
-        await application.bot.send_message(chat_id=GROUP_CHAT_ID, text=f"🌅 **Daily Update at {current_time}**")
+        await application.bot.send_message(
+            chat_id=GROUP_CHAT_ID,
+            text=f"🌅 *Daily Update at {current_time}* 🌟\nLet’s keep the momentum going, team! 💪",
+            parse_mode="Markdown"
+        )
 
         # Send missing values section
-        missing_values_text = "❌ **Missing Values in New User Stories**:\n" + missing_values_response
+        missing_values_text = f"❌ *Missing Values in New User Stories*:\n{missing_values_response}\n\n*Action needed*: Let’s fill in those gaps! 📝"
         missing_values_messages = split_message(missing_values_text)
         for msg in missing_values_messages:
-            await application.bot.send_message(chat_id=GROUP_CHAT_ID, text=msg)
+            await application.bot.send_message(chat_id=GROUP_CHAT_ID, text=msg, parse_mode="Markdown")
 
         # Send approaching deadlines section
-        deadline_text = "⏰ **Approaching Deadlines**:\n" + deadline_response
+        deadline_text = f"⏰ *Approaching Deadlines*:\n{deadline_response}\n\n*Heads up*: Let’s stay on track! 🏁"
         deadline_messages = split_message(deadline_text)
         for msg in deadline_messages:
-            await application.bot.send_message(chat_id=GROUP_CHAT_ID, text=msg)
+            await application.bot.send_message(chat_id=GROUP_CHAT_ID, text=msg, parse_mode="Markdown")
 
         # Send user stories summary section
-        summary_text = "📋 **User Stories Summary**:\n" + non_closed_response
+        summary_text = f"📋 *User Stories Summary*:\n{non_closed_response}\n\n*Great work, team*! Let’s close these out! 🎯"
         summary_messages = split_message(summary_text)
         for msg in summary_messages:
-            await application.bot.send_message(chat_id=GROUP_CHAT_ID, text=msg)
+            await application.bot.send_message(chat_id=GROUP_CHAT_ID, text=msg, parse_mode="Markdown")
 
         logger.info(f"Daily update sent to chat {GROUP_CHAT_ID}")
     # Schedule daily update at 9:00 AM IST
-    scheduler.add_job(daily_update, 'cron', hour=11, minute=48,second=0, timezone=tz)
+    scheduler.add_job(daily_update, 'cron', hour=15, minute=35,second=31, timezone=tz)
     scheduler.start()
     logger.info("Bot is running...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
