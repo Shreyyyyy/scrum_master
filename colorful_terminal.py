@@ -6,7 +6,7 @@ import threading
 import logging
 import nest_asyncio
 import requests
-import html2text
+import html2text 
 from datetime import datetime
 from typing import Annotated, Literal, Optional
 from dotenv import load_dotenv
